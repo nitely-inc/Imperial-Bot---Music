@@ -1,61 +1,136 @@
 const SlashCommand = require("../../lib/SlashCommand");
-const { MessageEmbed, MessageButton, MessageActionRow } = require("discord.js");
-const load = require("lodash");
-const fetch = require("node-fetch");
+const { MessageActionRow, MessageButton, MessageEmbed } = require("discord.js");
+const api = require('lyrics-searcher-musixmatch').default
 
 const command = new SlashCommand()
-  .setName("lyrics")
-  .setDescription("Shows lyrics of a song")
-  // get user input
-  .addStringOption((option) =>
-    option
-      .setName("song")
-      .setDescription("The song to get lyrics for")
-      .setRequired(false)
-  )
-  .setRun(async (client, interaction, options) => {
-    await interaction.reply({
-      embeds: [client.Embed(":mag_right: **Searching...**")],
+	.setName("lyrics")
+	.setDescription("Get the lyrics of a song")
+	.addStringOption((option) =>
+		option
+			.setName("song")
+			.setDescription("The song to get lyrics for")
+			.setRequired(false),
+	)
+	.setRun(async (client, interaction, options) => {
+		await interaction.reply({
+			embeds: [
+				new MessageEmbed()
+					.setColor(client.config.embedColor)
+					.setDescription("🔎 **Searching...**"),
+			],
+		});
+		
+		let player;
+		if (client.manager) {
+			player = client.manager.players.get(interaction.guild.id);
+		} else {
+			return interaction.reply({
+				embeds: [
+					new MessageEmbed()
+						.setColor("RED")
+						.setDescription("Lavalink node is not connected"),
+				],
+			});
+		}
+		
+		const args = interaction.options.getString("song");
+		if (!args && !player) {
+			return interaction.editReply({
+				embeds: [
+					new MessageEmbed()
+						.setColor("RED")
+						.setDescription("There's nothing playing"),
+				],
+			});
+		}
+		
+		let search = args? args : player.queue.current.title;
+        api(search).then((lyrics) => {
+		let text = lyrics.lyrics
+		const button = new MessageActionRow()
+			.addComponents(
+				new MessageButton()
+					.setCustomId('tipsbutton')
+					.setLabel('Tips')
+					.setEmoji(`📌`)
+					.setStyle('SECONDARY'),
+				new MessageButton()
+					.setLabel('Source')
+					.setURL(lyrics.info.track.shareUrl)
+					.setStyle('LINK'),
+			);
+		
+		let lyricsEmbed = new MessageEmbed()
+					.setColor(client.config.embedColor)
+					.setTitle(`${ lyrics.info.track.name }`)
+					.setURL(lyrics.info.track.shareUrl)
+					.setThumbnail(lyrics.info.track.albumCoverart350x350)
+                    .setFooter({ text: 'Lyrics provided by MusixMatch.', iconURL: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e3/Musixmatch_logo_icon_only.svg/480px-Musixmatch_logo_icon_only.svg.png' })
+					.setDescription(text);
+		
+		if (text.length > 4096) {
+				text = text.substring(0, 4050) + "\n\n[...]";
+				lyricsEmbed
+					.setDescription(text + `\nTruncated, the lyrics were too long.`)
+			}
+
+		return interaction.editReply({ 
+				embeds: [lyricsEmbed],
+				components: [button],
+			
+			});
+		
+		}) 
+		.catch((err) => {	
+		if (err.message == `No lyrics found!`) {
+			const button = new MessageActionRow()
+			.addComponents(
+				new MessageButton()
+				    .setEmoji(`📌`)
+				    .setCustomId('tipsbutton')
+					.setLabel('Tips')
+					.setStyle('SECONDARY'),
+			);	
+
+		return interaction.editReply({
+			embeds: [
+				new MessageEmbed()
+					.setColor("RED")
+					.setDescription(
+						`❌ | No lyrics found for ${ search }!\nMake sure you typed in your search correctly.`,
+					),
+			],
+			components: [button],
+		});
+	} else {
+		return interaction.editReply({
+			embeds: [
+				new MessageEmbed()
+					.setColor("RED")
+					.setDescription(
+						`❌ | Unknown error has been detected, please check your console.`,
+					),
+			],
+		});
+	};
+});
+
+const collector = interaction.channel.createMessageComponentCollector({time: 1000 * 3600 });
+
+collector.on('collect', async i => {
+	if (i.customId === 'tipsbutton') {
+		await i.deferUpdate();
+		await i.followUp({ 			
+		embeds: [
+			new MessageEmbed()
+			    .setTitle(`Lyrics Tips`)
+			    .setColor(client.config.embedColor)
+				.setDescription(
+					`Here is some tips to get your song lyrics correctly \n\n1. Try to add Artist name in front of the song name.\n2. Try to put the song name in the lyrics search box manually using your keyboard.\n3. Avoid using non english language when searching song lyrics, except the song itself doesnt use english language.`,
+				),
+		], ephemeral: true, components: [] });
+	    };
     });
-
-    const args = interaction.options.getString("song");
-
-    let player = client.manager.players.get(interaction.guild.id);
-
-    if (!args && !player)
-      return interaction.editReply({
-        embeds: [client.ErrorEmbed("**There's nothing playing**")],
-      });
-
-    // if no input, search for the current song. if no song console.log("No song input");
-    let search = args ? args : player.queue.current.title;
-    let url = `https://api.darrennathanael.com/lyrics?song=${search}`;
-    
-    
-    // get the lyrics 
-    let lyrics = await fetch(url).then((res) => res.json());
-
-    // if the status is ok then send the embed
-    if (lyrics.response == 200) {
-      // !BUG: if the lyrics are too long, the embed will fail. embeds[0].description: Must be 4096 or fewer in length.
-      let lyricsEmbed = new MessageEmbed()
-        .setColor(client.config.embedColor)
-        .setTitle(`${lyrics.full_title}`)
-        .setURL(lyrics.url)
-        .setThumbnail(lyrics.thumbnail)
-        .setDescription(lyrics.lyrics);
-      return interaction.editReply({ embeds: [lyricsEmbed] });
-    } else if (lyrics.response !== 200) {
-      let failEmbed = new MessageEmbed()
-        .setColor("RED")
-        .setDescription(`❌ | No lyrics found for ${search}! Please try again.`);
-      return interaction.editReply({ embeds: [failEmbed] });
-    }
-  });
-
-
-
-
-      
+});
 
 module.exports = command;
